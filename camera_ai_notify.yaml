@@ -1,13 +1,26 @@
 blueprint:
   name: Camera Snapshot AI Notification
-  description: "Takes a burst of three camera snapshots when motion is detected, sends
-    them to an AI Task entity for a short description, and pushes a notification to
-    your phone. Skips the notification when the AI reports nothing of interest.\nRequires
-    the snapshot folder to be registered as a media source under `homeassistant: media_dirs:`
-    in configuration.yaml, and a full restart of Home Assistant after adding it.\nBlow
-    is the example configuration.yaml snippet to register the snapshot folder as a
-    media source:\n```yaml\nhomeassistant:\nmedia_dirs:\n  local: /media     # keep
-    the default entry\n  snapshots: /config/www/snapshots\n\n```"
+  description: |-
+    Get a phone notification that tells you *what* set off your motion sensor. When motion is detected, the blueprint takes 3 quick snapshots from your camera, asks an AI Task entity to describe what changed, and sends the answer to your phone along with one of the snapshots.
+
+    **How it works:**
+    - **Snapshots:** 3 images in a row, with an adjustable delay between them
+    - **AI description:** a short summary of the cause, with extra detail for people and cars. The prompt is fully customizable
+    - **No false alarms:** if the AI replies with the "no motion" phrase, no notification is sent
+    - **Notification:** sent to a phone with the Home Assistant Companion app, with the middle snapshot attached
+
+    **Before you start:**
+    - You need an AI Task entity backed by a vision-capable model.
+    - The snapshot folder must be registered as a media source so the AI can read the images. Add this to `configuration.yaml`, then fully restart Home Assistant:
+
+    ```yaml
+    homeassistant:
+      media_dirs:
+        local: /media              # keep the default entry
+        snapshots: /config/www/snapshots
+    ```
+
+    Keep the folder inside `/config/www` if you want the image to appear in the notification.
   domain: automation
   author: Ender
   input:

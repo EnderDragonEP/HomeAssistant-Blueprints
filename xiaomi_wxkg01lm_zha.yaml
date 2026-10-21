@@ -1,12 +1,17 @@
 blueprint:
   name: ZHA - Xiaomi Mijia Wireless Switch (WXKG01LM)
-  description: >-
-    Run actions on single, double, triple, quadruple and 5+ presses, hold and
-    release of the round Xiaomi Mijia button (lumi.sensor_switch) paired with
-    ZHA using the MijaButton quirk. Optionally repeats the hold action until
-    the button is released, or turns hold into a dimmer that alternates
-    between brightening and dimming a light on every hold (needs a Toggle
-    helper to remember the direction).
+  description: |-
+    Turn the round Xiaomi Mijia wireless button (WXKG01LM, `lumi.sensor_switch`) into a multi-function remote with ZHA.
+
+    **Presses:** run a different action on single, double, triple and quadruple presses, and on 5 or more presses in a row.
+
+    **Hold and release:**
+    - **Hold:** runs about 1 second after you press and hold the button. It can repeat until you let go, with an adjustable interval and a safety limit in case the release is missed
+    - **Release:** runs when you let go after a hold
+
+    **Hold-to-dim (optional):** pick a light and holding the button dims or brightens it smoothly. Each hold goes the opposite way from the last one. At full brightness it always dims, and when the light is off or at minimum brightness it always brightens. This needs an `input_boolean` Toggle helper to remember the direction.
+
+    Requires Home Assistant 2024.10 or newer and the button paired with ZHA using the MijaButton quirk.
   domain: automation
   homeassistant:
     min_version: 2024.10.0
