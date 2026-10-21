@@ -1,0 +1,187 @@
+blueprint:
+  name: Camera Snapshot AI Notification
+  description: "Takes a burst of three camera snapshots when motion is detected, sends
+    them to an AI Task entity for a short description, and pushes a notification to
+    your phone. Skips the notification when the AI reports nothing of interest.\nRequires
+    the snapshot folder to be registered as a media source under `homeassistant: media_dirs:`
+    in configuration.yaml, and a full restart of Home Assistant after adding it.\nBlow
+    is the example configuration.yaml snippet to register the snapshot folder as a
+    media source:\n```yaml\nhomeassistant:\nmedia_dirs:\n  local: /media     # keep
+    the default entry\n  snapshots: /config/www/snapshots\n\n```"
+  domain: automation
+  author: Ender
+  input:
+    camera_name:
+      name: Camera name
+      description: Friendly name for this camera, e.g. "Driveway 1". Used in the notification
+        title and slugified for the snapshot filenames (Driveway 1 -> driveway_1_snapshot1.jpg).
+      default: Driveway 1
+      selector:
+        text:
+          multiline: false
+          multiple: false
+    motion_entity:
+      name: Motion sensor
+      description: The entity whose transition to "on" triggers this automation.
+      selector:
+        entity:
+          filter:
+          - domain:
+            - binary_sensor
+          reorder: false
+          multiple: false
+    camera_entity:
+      name: Camera
+      description: The camera to take snapshots from.
+      selector:
+        entity:
+          filter:
+          - domain:
+            - camera
+          reorder: false
+          multiple: false
+    ai_task_entity:
+      name: AI Task entity
+      description: The AI Task entity that will analyse the images. Must be backed
+        by a vision-capable model.
+      selector:
+        entity:
+          filter:
+          - domain:
+            - ai_task
+          reorder: false
+          multiple: false
+    notify_device:
+      name: Device to notify
+      description: The phone running the Home Assistant Companion app.
+      selector:
+        device:
+          filter:
+          - integration: mobile_app
+          multiple: false
+    snapshot_dir:
+      name: Snapshot directory
+      description: Filesystem path where snapshots are written. Must be registered
+        under media_dirs and, if you want images in the notification, live inside
+        /config/www.
+      default: /config/www/snapshots
+      selector:
+        text:
+          multiline: false
+          multiple: false
+    media_source_name:
+      name: Media source name
+      description: The key you gave this folder under homeassistant > media_dirs in
+        configuration.yaml.
+      default: snapshots
+      selector:
+        text:
+          multiline: false
+          multiple: false
+    image_url_base:
+      name: Notification image base path
+      description: Web path matching the snapshot directory. /config/www maps to /local.
+        Leave blank to send the notification without an image.
+      default: /local/snapshots
+      selector:
+        text:
+          multiline: false
+          multiple: false
+    snapshot_delay:
+      name: Delay between snapshots
+      description: Time between each of the three captures.
+      default: 500
+      selector:
+        number:
+          min: 100.0
+          max: 5000.0
+          step: 100.0
+          unit_of_measurement: ms
+          mode: slider
+    ai_prompt:
+      name: AI prompt
+      description: Instructions sent to the AI. The variable {{ camera_name }} is
+        available and will be substituted. The phrase in "No motion phrase" below
+        must appear here for the skip logic to work.
+      default: Motion has been detected. Compare and very briefly describe what you
+        see in the following sequence of images from my {{ camera_name }} camera.
+        What do you think caused the motion alarm? If a person or car is present,
+        describe them in detail. Do not describe stationary objects or buildings.
+        If you see no obvious causes of motion, reply with "No Obvious Motion Detected."
+        Your message needs to be short enough to fit in a phone notification.
+      selector:
+        text:
+          multiline: true
+          multiple: false
+    no_motion_phrase:
+      name: No motion phrase
+      description: If the AI response contains this text, no notification is sent.
+        Must match the phrase used in the prompt above.
+      default: No Obvious Motion Detected.
+      selector:
+        text:
+          multiline: false
+          multiple: false
+  source_url: https://noobienoodle89.cc/share-point/dl/ha_blueprint/camera_ai_notify.yaml
+mode: single
+max_exceeded: silent
+triggers:
+- trigger: state
+  entity_id: !input motion_entity
+  to: 'on'
+conditions: []
+variables:
+  camera_name: !input camera_name
+  slug: '{{ camera_name | slugify }}'
+  snapshot_dir: !input snapshot_dir
+  media_source_name: !input media_source_name
+  image_url_base: !input image_url_base
+  no_motion_phrase: !input no_motion_phrase
+  notify_device: !input notify_device
+  ai_prompt: !input ai_prompt
+actions:
+- alias: Capture three snapshots
+  repeat:
+    count: 3
+    sequence:
+    - action: camera.snapshot
+      target:
+        entity_id: !input camera_entity
+      data:
+        filename: '{{ snapshot_dir }}/{{ slug }}_snapshot{{ repeat.index }}.jpg'
+    - if:
+      - condition: template
+        value_template: '{{ repeat.index < 3 }}'
+      then:
+      - delay:
+          milliseconds: !input snapshot_delay
+- alias: Ask the AI what it sees
+  action: ai_task.generate_data
+  data:
+    task_name: '{{ camera_name }} motion analysis'
+    entity_id: !input ai_task_entity
+    instructions: '{{ ai_prompt }}'
+    attachments:
+    - media_content_id: media-source://media_source/{{ media_source_name }}/{{ slug
+        }}_snapshot1.jpg
+      media_content_type: image/jpeg
+    - media_content_id: media-source://media_source/{{ media_source_name }}/{{ slug
+        }}_snapshot2.jpg
+      media_content_type: image/jpeg
+    - media_content_id: media-source://media_source/{{ media_source_name }}/{{ slug
+        }}_snapshot3.jpg
+      media_content_type: image/jpeg
+  response_variable: generated_content
+- alias: Notify unless the AI saw nothing
+  if:
+  - condition: template
+    value_template: '{{ no_motion_phrase in generated_content.data }}'
+  then:
+  - stop: Nothing worth reporting
+  else:
+  - action: notify.mobile_app_{{ device_attr(notify_device, 'name') | slugify }}
+    data:
+      title: '{{ camera_name }} Motion Detected'
+      message: '{{ generated_content.data }}'
+      data: "{% if image_url_base %}\n  {{ {'image': image_url_base ~ '/' ~ slug ~
+        '_snapshot2.jpg'} }}\n{% else %}\n  {{ {} }}\n{% endif %}"

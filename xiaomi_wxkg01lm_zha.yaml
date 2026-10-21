@@ -1,0 +1,268 @@
+blueprint:
+  name: ZHA - Xiaomi Mijia Wireless Switch (WXKG01LM)
+  description: >-
+    Run actions on single, double, triple, quadruple and 5+ presses, hold and
+    release of the round Xiaomi Mijia button (lumi.sensor_switch) paired with
+    ZHA using the MijaButton quirk. Optionally repeats the hold action until
+    the button is released, or turns hold into a dimmer that alternates
+    between brightening and dimming a light on every hold (needs a Toggle
+    helper to remember the direction).
+  domain: automation
+  homeassistant:
+    min_version: 2024.10.0
+  input:
+    remote:
+      name: Button
+      description: The Xiaomi Mijia button (lumi.sensor_switch) paired with ZHA.
+      selector:
+        device:
+          filter:
+            - integration: zha
+              model: lumi.sensor_switch
+          multiple: false
+
+    press_section:
+      name: Press actions
+      icon: mdi:gesture-tap
+      input:
+        single_action:
+          name: Single press
+          default: []
+          selector:
+            action: {}
+        double_action:
+          name: Double press
+          default: []
+          selector:
+            action: {}
+        triple_action:
+          name: Triple press
+          default: []
+          selector:
+            action: {}
+        quadruple_action:
+          name: Quadruple press
+          default: []
+          selector:
+            action: {}
+        furious_action:
+          name: Five or more presses
+          description: Fired by the "furious" click type (5+ presses in a row).
+          default: []
+          selector:
+            action: {}
+
+    hold_section:
+      name: Hold actions
+      icon: mdi:gesture-tap-hold
+      input:
+        hold_action:
+          name: Hold
+          description: >-
+            Runs about 1 second after the button is held down. Ignored when a
+            light is selected under "Hold-to-dim light".
+          default: []
+          selector:
+            action: {}
+        release_action:
+          name: Release after hold
+          default: []
+          selector:
+            action: {}
+        hold_loop:
+          name: Repeat hold action until release
+          description: Keep repeating the hold action while the button is held.
+          default: false
+          selector:
+            boolean: {}
+        hold_loop_delay:
+          name: Repeat interval
+          description: >-
+            Pause between repeats of the hold action, and between brightness
+            steps of the dimmer.
+          default: 500
+          selector:
+            number:
+              min: 100
+              max: 5000
+              step: 50
+              unit_of_measurement: ms
+              mode: box
+        hold_max_repeats:
+          name: Maximum repeats
+          description: >-
+            Safety limit in case the release event is missed. Applies to the
+            repeated hold action and to the dimmer.
+          default: 30
+          selector:
+            number:
+              min: 1
+              max: 500
+              mode: box
+
+    dimmer_section:
+      name: Hold-to-dim light
+      icon: mdi:brightness-6
+      collapsed: true
+      input:
+        dim_light:
+          name: Light
+          description: >-
+            Light to dim or brighten while the button is held. Each new hold
+            goes the opposite way from the last one. At full brightness it
+            always dims; when off or at minimum it always brightens. Leave
+            empty to use the Hold action instead.
+          default: ''
+          selector:
+            entity:
+              filter:
+                - domain: light
+              multiple: false
+        dim_direction_helper:
+          name: Direction helper
+          description: >-
+            Required for hold-to-dim. An input_boolean Toggle helper the
+            blueprint uses to remember the last direction (on = last hold
+            brightened). Create one under Settings → Devices & services →
+            Helpers → Toggle.
+          default: ''
+          selector:
+            entity:
+              filter:
+                - domain: input_boolean
+              multiple: false
+        dim_step_pct:
+          name: Brightness step
+          description: How much the brightness changes on each step.
+          default: 10
+          selector:
+            number:
+              min: 1
+              max: 50
+              unit_of_measurement: '%'
+              mode: slider
+        dim_min_pct:
+          name: Minimum brightness
+          description: >-
+            Dimming stops here so the light doesn't turn off. Set it to your
+            light's own lowest brightness.
+          default: 1
+          selector:
+            number:
+              min: 1
+              max: 50
+              unit_of_measurement: '%'
+              mode: slider
+        dim_smooth:
+          name: Smooth transitions
+          description: >-
+            Fade between steps over the repeat interval. Turn off if your light
+            stutters or lags with transitions.
+          default: true
+          selector:
+            boolean: {}
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  hold_loop: !input hold_loop
+  hold_loop_delay: !input hold_loop_delay
+  hold_max_repeats: !input hold_max_repeats
+  dim_light: !input dim_light
+  dim_direction_helper: !input dim_direction_helper
+  dim_step_pct: !input dim_step_pct
+  dim_min_pct: !input dim_min_pct
+  dim_smooth: !input dim_smooth
+
+triggers:
+  - trigger: event
+    event_type: zha_event
+    event_data:
+      device_id: !input remote
+      command: click
+    id: click
+  - trigger: event
+    event_type: zha_event
+    event_data:
+      device_id: !input remote
+      command: hold
+    id: hold
+  - trigger: event
+    event_type: zha_event
+    event_data:
+      device_id: !input remote
+      command: release
+    id: release
+
+actions:
+  - variables:
+      press: >-
+        {{ trigger.event.data.args.click_type if trigger.id == 'click' else trigger.id }}
+  - choose:
+      - conditions: "{{ press == 'single' }}"
+        sequence: !input single_action
+      - conditions: "{{ press == 'double' }}"
+        sequence: !input double_action
+      - conditions: "{{ press == 'triple' }}"
+        sequence: !input triple_action
+      - conditions: "{{ press == 'quadruple' }}"
+        sequence: !input quadruple_action
+      - conditions: "{{ press == 'furious' }}"
+        sequence: !input furious_action
+      - conditions: "{{ press == 'hold' }}"
+        sequence:
+          - if: "{{ dim_light not in ['', None] }}"
+            then:
+              # Hold-to-dim: pick a direction, remember it, then step the
+              # brightness until release (mode: restart stops the loop).
+              - if: "{{ dim_direction_helper in ['', None] }}"
+                then:
+                  - stop: >-
+                      Hold-to-dim needs a Direction helper. Pick an
+                      input_boolean in the blueprint's Hold-to-dim settings.
+                    error: true
+              - variables:
+                  start_pct: >-
+                    {% if is_state(dim_light, 'on') %}
+                      {{ ((state_attr(dim_light, 'brightness') | int(0)) / 255 * 100) | round(0) | int }}
+                    {% else %}0{% endif %}
+                  last_up: "{{ is_state(dim_direction_helper, 'on') }}"
+                  dim_up: >-
+                    {{ true if start_pct <= dim_min_pct | int
+                       else (false if start_pct >= 100 else not last_up) }}
+              - action: "input_boolean.turn_{{ 'on' if dim_up else 'off' }}"
+                target:
+                  entity_id: "{{ dim_direction_helper }}"
+              - repeat:
+                  while:
+                    - "{{ repeat.index <= hold_max_repeats | int }}"
+                    - >-
+                      {% set done = dim_step_pct | int * (repeat.index - 1) %}
+                      {% if dim_up %}{{ start_pct + done < 100 }}
+                      {% else %}{{ start_pct - done > dim_min_pct | int }}{% endif %}
+                  sequence:
+                    - action: light.turn_on
+                      target:
+                        entity_id: "{{ dim_light }}"
+                      data:
+                        brightness_pct: >-
+                          {% set step = dim_step_pct | int * repeat.index %}
+                          {% set t = start_pct + step if dim_up else start_pct - step %}
+                          {{ [[t, dim_min_pct | int] | max, 100] | min }}
+                        transition: "{{ (hold_loop_delay | int / 1000) if dim_smooth else 0 }}"
+                    - delay:
+                        milliseconds: "{{ hold_loop_delay | int }}"
+            else:
+              - if: "{{ hold_loop }}"
+                then:
+                  - repeat:
+                      while: "{{ repeat.index <= hold_max_repeats | int }}"
+                      sequence:
+                        - sequence: !input hold_action
+                        - delay:
+                            milliseconds: "{{ hold_loop_delay | int }}"
+                else:
+                  - sequence: !input hold_action
+      - conditions: "{{ press == 'release' }}"
+        sequence: !input release_action
