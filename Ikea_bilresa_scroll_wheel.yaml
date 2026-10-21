@@ -1,8 +1,19 @@
 blueprint:
   name: Ikea Bilresa scroll wheel
-  description: 'Blueprint for Ikea Bilresa Matter (button and scroll wheel for 3 different
-    channels)
-    Forked from jhol-byte: https://community.home-assistant.io/t/ikea-bilresa-scroll-wheel-blueprint-matter/965365'
+  description: |-
+    Control lights and media players with the IKEA BILRESA scroll wheel remote over Matter. Each of the remote's 3 channels has its own button and scroll wheel settings.
+
+    **Button:** run actions on click, double-click, triple-click and long-click, plus an on-hold action that repeats until the button is released.
+
+    **Scroll wheel modes:**
+    - **Lights:** dim, change color temperature, change color hue, or color temperature and hue together (picked per light by its color mode)
+    - **Media:** volume control with a configurable maximum volume
+    - **Dynamic:** switch between modes on the fly using an `input_select` helper
+    - **User defined:** run your own action with the `scroll_clicks` and `scroll_direction` variables
+
+    Scrolling is handled either *relaxed* (one call after you stop scrolling) or *instant* (calls while you scroll). Instant mode needs the remote's 9 hidden sensor entities to be enabled.
+
+    Forked from [jhol-byte's blueprint](https://community.home-assistant.io/t/ikea-bilresa-scroll-wheel-blueprint-matter/965365).
   domain: automation
   input:
     remote:
