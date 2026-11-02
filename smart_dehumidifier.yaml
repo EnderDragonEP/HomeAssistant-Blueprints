@@ -3,29 +3,13 @@
 
 blueprint:
   name: Smart dehumidifier (energy saving)
-  description: |-
-    Keep a room at your target humidity while running the dehumidifier as little as possible. A separate room humidity sensor makes every decision, so the unit's own (often inaccurate) sensor doesn't matter. Works with a dehumidifier entity or with a plain switch / smart plug that powers the unit.
-
-    **Control:**
-    - **Coarse:** turns the unit on above target + band and off below target − band. Works with any entity
-    - **Precise:** also sets the unit's own target humidity, corrected for the difference between its sensor and the room sensor (dehumidifier entities only)
-    - **Spike smoothing:** short bursts from a shower or cooking don't start the unit
-
-    **Saving energy (all optional):**
-    - **Schedule:** run only during off-peak hours, or never during quiet hours
-    - **Windows:** pause while a window or door is open, or let the room dry naturally when the outside air is drier
-    - **Presence:** raise the target while nobody is home
-    - **Cheap power:** run only when electricity is cheap or there is solar surplus, unless the room gets humid enough to risk mould
-
-    **Protection and safety (all optional):**
-    - **Compressor:** minimum on/off times and a forced rest after long runs
-    - **Tank full / sensor lost:** stops the unit and notifies you
-    - **Effectiveness guard:** stops the unit and notifies you if it runs but humidity doesn't fall, for example because a door was left open
-    - **Drain pump:** empties the tank with a pump when a water sensor in the tank gets wet, and warns you if the water doesn't go down
-
-    Notifications appear in Home Assistant and can also run your own actions, such as a phone notification.
-
-    The effectiveness guard needs a Derivative helper of the room humidity sensor. Nothing else needs a helper. Requires Home Assistant 2024.10 or newer.
+  description: >-
+    Runs a Wi-Fi dehumidifier from an external humidity sensor and keeps the room
+    inside a band around your target with as little runtime as possible. Works with
+    a humidifier entity (device_class dehumidifier) or a plain switch / smart plug.
+    Every power-saving and safety feature is optional, including drain-pump control
+    from a tank level sensor. Only the optional effectiveness guard needs a helper
+    (a Derivative sensor of the room humidity); setup steps are in that section.
   domain: automation
   homeassistant:
     min_version: "2024.10.0"
@@ -285,15 +269,16 @@ blueprint:
         because a door or window without a sensor is open. Needs one helper,
         created once in the UI:
 
-        1. Go to **Settings → Devices & services → Helpers → Create helper → Derivative sensor**.
-        2. Fill in the fields:
-          - **Name:** e.g. `Helper - Humidity Trend`
-          - **Input sensor:** your room humidity sensor
-          - **Precision:** `2`
-          - **Time window:** `00:20:00`
-          - **Metric prefix:** none
-          - **Time unit:** Hours
-        3. In this automation, open **Effectiveness guard** and select the new helper
+        1. Go to **Settings → Devices & services → Helpers → Create helper →
+           Derivative sensor**.
+        2. **Name:** for example *Bedroom humidity trend*.
+        3. **Input sensor:** the same room humidity sensor selected in
+           *Devices and control mode*.
+        4. **Precision:** 2
+        5. **Time window:** 00:20:00
+        6. **Metric prefix:** none
+        7. **Time unit:** Hours
+        8. Select the new sensor below as **Humidity trend sensor**.
 
         Keep the grace period longer than the helper's time window. To tune the
         minimum drop rate, look at the trend sensor's history during a few normal
