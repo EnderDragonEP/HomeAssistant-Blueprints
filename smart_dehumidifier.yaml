@@ -280,13 +280,33 @@ blueprint:
       name: Effectiveness guard
       icon: mdi:trending-down
       collapsed: true
+      description: |-
+        Stops the unit when it runs but the room isn't getting drier, for example
+        because a door or window without a sensor is open. Needs one helper,
+        created once in the UI:
+
+        1. Go to **Settings → Devices & services → Helpers → Create helper → Derivative sensor**.
+        2. Fill in the fields:
+          - **Name:** e.g. `Helper - Humidity Trend`
+          - **Input sensor:** your room humidity sensor
+          - **Precision:** `2`
+          - **Time window:** `00:20:00`
+          - **Metric prefix:** none
+          - **Time unit:** Hours
+        3. In this automation, open **Effectiveness guard** and select the new helper
+
+        Keep the grace period longer than the helper's time window. To tune the
+        minimum drop rate, look at the trend sensor's history during a few normal
+        runs with doors closed and set it to about a third to half of the usual
+        falling rate.
       input:
         humidity_trend_sensor:
           name: Humidity trend sensor
           description: >-
-            Derivative helper of the room humidity sensor (%/h; %/min, %/s and %/d
-            are converted). If the unit runs but humidity doesn't fall, it is
-            stopped, you are notified and it pauses. Empty = disabled.
+            Derivative helper of the room humidity sensor (setup steps are at the
+            top of this section). If the unit runs but humidity doesn't fall, it is
+            stopped, you are notified and it pauses. %/h is expected; %/min, %/s
+            and %/d are converted. Empty = disabled.
           default: ""
           selector:
             entity:
