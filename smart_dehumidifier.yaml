@@ -1,0 +1,1012 @@
+# Smart dehumidifier (energy saving) – Home Assistant automation blueprint
+# Includes optional drain-pump control.
+
+blueprint:
+  name: Smart dehumidifier (energy saving)
+  description: |-
+    Keep a room at your target humidity while running the dehumidifier as little as possible. A separate room humidity sensor makes every decision, so the unit's own (often inaccurate) sensor doesn't matter. Works with a dehumidifier entity or with a plain switch / smart plug that powers the unit.
+
+    **Control:**
+    - **Coarse:** turns the unit on above target + band and off below target − band. Works with any entity
+    - **Precise:** also sets the unit's own target humidity, corrected for the difference between its sensor and the room sensor (dehumidifier entities only)
+    - **Spike smoothing:** short bursts from a shower or cooking don't start the unit
+
+    **Saving energy (all optional):**
+    - **Schedule:** run only during off-peak hours, or never during quiet hours
+    - **Windows:** pause while a window or door is open, or let the room dry naturally when the outside air is drier
+    - **Presence:** raise the target while nobody is home
+    - **Cheap power:** run only when electricity is cheap or there is solar surplus, unless the room gets humid enough to risk mould
+
+    **Protection and safety (all optional):**
+    - **Compressor:** minimum on/off times and a forced rest after long runs
+    - **Tank full / sensor lost:** stops the unit and notifies you
+    - **Effectiveness guard:** stops the unit and notifies you if it runs but humidity doesn't fall, for example because a door was left open
+    - **Drain pump:** empties the tank with a pump when a water sensor in the tank gets wet, and warns you if the water doesn't go down
+
+    Notifications appear in Home Assistant and can also run your own actions, such as a phone notification.
+
+    The effectiveness guard needs a Derivative helper of the room humidity sensor. Nothing else needs a helper. Requires Home Assistant 2024.10 or newer.
+  domain: automation
+  homeassistant:
+    min_version: "2024.10.0"
+  input:
+    devices:
+      name: Devices and control mode
+      icon: mdi:air-humidifier
+      input:
+        dehumidifier:
+          name: Dehumidifier
+          description: >-
+            Humidifier entity with device_class dehumidifier, or the switch / smart
+            plug that powers the unit. Required, so there is no default.
+          selector:
+            entity:
+              filter:
+                - domain: humidifier
+                  device_class: dehumidifier
+                - domain: switch
+        humidity_sensor:
+          name: Room humidity sensor
+          description: >-
+            External sensor that drives every decision. Keep it away from the
+            unit's dry-air outlet. Required, so there is no default.
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: humidity
+        control_mode:
+          name: Control mode
+          description: >-
+            Coarse switches the unit on/off around the band. Precise also sets the
+            unit's own target with humidifier.set_humidity (offset-corrected).
+            Precise falls back to coarse when the dehumidifier is a switch.
+          default: coarse
+          selector:
+            select:
+              options:
+                - label: Coarse – on/off with hysteresis (any entity)
+                  value: coarse
+                - label: Precise – device setpoint (humidifier entities only)
+                  value: precise
+
+    targets:
+      name: Target and smoothing
+      icon: mdi:water-percent
+      input:
+        target_humidity:
+          name: Target humidity
+          description: Room humidity to hold while someone is home.
+          default: 55
+          selector:
+            number: {min: 30, max: 80, step: 1, unit_of_measurement: "%", mode: slider}
+        hysteresis_band:
+          name: Hysteresis band
+          description: >-
+            Turn on above target + band, off below target − band. A wider band
+            means fewer, longer cycles. 0 disables the band (not recommended).
+          default: 3
+          selector:
+            number: {min: 0, max: 15, step: 0.5, unit_of_measurement: "%", mode: slider}
+        smoothing_minutes:
+          name: Spike smoothing
+          description: >-
+            Humidity must stay above the ON threshold this long before the unit
+            starts, so shower or cooking spikes are ignored. 0 disables.
+          default: 5
+          selector:
+            number: {min: 0, max: 60, step: 1, unit_of_measurement: min, mode: slider}
+
+    precise_mode:
+      name: Precise mode
+      icon: mdi:tune-variant
+      collapsed: true
+      input:
+        offset_source:
+          name: Offset correction
+          description: >-
+            Auto = the unit's current_humidity attribute minus the room reading
+            (falls back to the manual offset if the unit doesn't report it).
+            Manual = always use the value below.
+          default: auto
+          selector:
+            select:
+              options:
+                - label: Auto (from the unit's built-in sensor)
+                  value: auto
+                - label: Manual
+                  value: manual
+        manual_offset:
+          name: Manual offset
+          description: >-
+            Unit reading minus room reading. Example: the unit shows 50 % while the
+            room sensor shows 55 % → −5. 0 = no correction.
+          default: 0
+          selector:
+            number: {min: -20, max: 20, step: 0.5, unit_of_measurement: "%", mode: slider}
+        max_offset:
+          name: Offset limit
+          description: The automatic offset is clamped to ± this value.
+          default: 10
+          selector:
+            number: {min: 0, max: 20, step: 1, unit_of_measurement: "%", mode: slider}
+        setpoint_step:
+          name: Setpoint step
+          description: Step the unit accepts (commonly 1 or 5). The setpoint is rounded to it.
+          default: 1
+          selector:
+            number: {min: 1, max: 10, step: 1, unit_of_measurement: "%", mode: slider}
+        setpoint_deadband:
+          name: Setpoint update deadband
+          description: Only resend the setpoint when it would move by at least this much.
+          default: 2
+          selector:
+            number: {min: 1, max: 10, step: 1, unit_of_measurement: "%", mode: slider}
+
+    protection:
+      name: Compressor protection
+      icon: mdi:engine-outline
+      collapsed: true
+      input:
+        min_on_minutes:
+          name: Minimum ON time
+          description: Once started, run at least this long (safety stops excepted). 0 disables.
+          default: 15
+          selector:
+            number: {min: 0, max: 60, step: 1, unit_of_measurement: min, mode: slider}
+        min_off_minutes:
+          name: Minimum OFF time
+          description: Once stopped, stay off at least this long. 0 disables.
+          default: 10
+          selector:
+            number: {min: 0, max: 60, step: 1, unit_of_measurement: min, mode: slider}
+        max_runtime_enabled:
+          name: Enable maximum continuous runtime
+          description: Force a rest after the unit has run this long without a break.
+          default: false
+          selector:
+            boolean: {}
+        max_runtime_minutes:
+          name: Maximum continuous runtime
+          description: Continuous runtime after which the unit is stopped for a rest.
+          default: 240
+          selector:
+            number: {min: 30, max: 720, step: 15, unit_of_measurement: min, mode: box}
+        rest_minutes:
+          name: Forced rest
+          description: How long the unit stays off after hitting the maximum runtime.
+          default: 30
+          selector:
+            number: {min: 5, max: 180, step: 5, unit_of_measurement: min, mode: box}
+
+    schedule:
+      name: Schedule
+      icon: mdi:clock-outline
+      collapsed: true
+      input:
+        time_window_mode:
+          name: Time window
+          description: >-
+            Allow = run only between start and end (e.g. off-peak tariff).
+            Block = never run between start and end (quiet hours).
+            Windows may cross midnight; start = end means the whole day.
+          default: disabled
+          selector:
+            select:
+              options:
+                - label: Disabled
+                  value: disabled
+                - label: Allow – run only inside the window
+                  value: allow
+                - label: Block – never run inside the window (quiet hours)
+                  value: block
+        time_window_start:
+          name: Window start
+          description: Start of the time window.
+          default: "23:00:00"
+          selector:
+            time: {}
+        time_window_end:
+          name: Window end
+          description: End of the time window.
+          default: "07:00:00"
+          selector:
+            time: {}
+
+    windows:
+      name: Windows and natural drying
+      icon: mdi:window-open-variant
+      collapsed: true
+      input:
+        window_sensors:
+          name: Window / door sensors
+          description: Openings in the dehumidified room. Leave empty to disable both features below.
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: binary_sensor
+                  device_class: [window, door, opening, garage_door]
+        window_pause_enabled:
+          name: Pause while a window is open
+          description: Stop (and don't start) while any listed sensor has been open longer than the delay.
+          default: true
+          selector:
+            boolean: {}
+        window_open_minutes:
+          name: Window open delay
+          description: How long an opening must stay open before the unit pauses.
+          default: 3
+          selector:
+            number: {min: 0, max: 60, step: 1, unit_of_measurement: min, mode: slider}
+        outdoor_humidity_sensor:
+          name: Outdoor humidity sensor (natural drying)
+          description: >-
+            If set, the unit does not run while a window is open and outdoor air is
+            drier than indoor air (applies immediately, no delay). Empty = disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: humidity
+        outdoor_temperature_sensor:
+          name: Outdoor temperature sensor
+          description: Optional. With both temperatures set, absolute humidity is compared (much more accurate).
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        indoor_temperature_sensor:
+          name: Indoor temperature sensor
+          description: Optional. Used with the outdoor temperature for the absolute-humidity comparison.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: temperature
+        drying_margin:
+          name: Natural drying margin
+          description: Outdoor air must be at least this much drier (relative %) than indoor air.
+          default: 10
+          selector:
+            number: {min: 0, max: 50, step: 1, unit_of_measurement: "%", mode: slider}
+
+    effectiveness:
+      name: Effectiveness guard
+      icon: mdi:trending-down
+      collapsed: true
+      input:
+        humidity_trend_sensor:
+          name: Humidity trend sensor
+          description: >-
+            Derivative helper of the room humidity sensor (%/h; %/min, %/s and %/d
+            are converted). If the unit runs but humidity doesn't fall, it is
+            stopped, you are notified and it pauses. Empty = disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+        effect_grace_minutes:
+          name: Grace period
+          description: >-
+            Running time before effectiveness is judged. Keep it longer than the
+            helper's time window.
+          default: 30
+          selector:
+            number: {min: 10, max: 180, step: 5, unit_of_measurement: min, mode: slider}
+        effect_min_drop_rate:
+          name: Minimum drop rate
+          description: >-
+            While humidity is still above the ON threshold, it must fall at least
+            this fast. Slower or rising counts as ineffective.
+          default: 1
+          selector:
+            number: {min: 0, max: 10, step: 0.1, unit_of_measurement: "%/h", mode: slider}
+        effect_lockout_minutes:
+          name: Pause after an ineffective run
+          description: >-
+            How long the unit stays off after the guard trips. Turn the automation
+            off and on again to cancel the pause early.
+          default: 60
+          selector:
+            number: {min: 15, max: 480, step: 15, unit_of_measurement: min, mode: box}
+
+    presence:
+      name: Presence
+      icon: mdi:home-account
+      collapsed: true
+      input:
+        presence_entities:
+          name: Presence entities
+          description: >-
+            Nobody is home when none of these is 'home' or 'on'. Empty = always
+            treated as home (feature disabled).
+          default: []
+          selector:
+            entity:
+              multiple: true
+              filter:
+                - domain: person
+                - domain: device_tracker
+                - domain: binary_sensor
+                  device_class: [occupancy, presence]
+        away_offset:
+          name: Away setback
+          description: Added to the target while nobody is home.
+          default: 8
+          selector:
+            number: {min: 0, max: 25, step: 1, unit_of_measurement: "%", mode: slider}
+
+    cheap_power:
+      name: Cheap power
+      icon: mdi:flash
+      collapsed: true
+      input:
+        price_sensor:
+          name: Electricity price sensor
+          description: Run only when the price is at or below the maximum. Empty = disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+        price_max:
+          name: Maximum price
+          description: In the price sensor's own unit.
+          default: 0.25
+          selector:
+            number: {min: -100, max: 1000, step: 0.001, mode: box}
+        surplus_sensor:
+          name: Solar surplus / export sensor
+          description: >-
+            Run when surplus is at or above the minimum. If both price and surplus
+            are set, either one being favourable is enough. Empty = disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: power
+        surplus_min:
+          name: Minimum surplus
+          description: In the surplus sensor's own unit (usually W).
+          default: 500
+          selector:
+            number: {min: 0, max: 20000, step: 50, mode: box}
+        surplus_invert:
+          name: Invert surplus sign
+          description: Enable if your sensor is negative while exporting (typical grid meters).
+          default: false
+          selector:
+            boolean: {}
+        power_override_humidity:
+          name: Ignore price above
+          description: >-
+            Above this room humidity, price/surplus gating is ignored (mould
+            protection). 100 = never override.
+          default: 75
+          selector:
+            number: {min: 50, max: 100, step: 1, unit_of_measurement: "%", mode: slider}
+
+    safety:
+      name: Safety and notifications
+      icon: mdi:shield-alert
+      collapsed: true
+      input:
+        sensor_unavailable_minutes:
+          name: Sensor lost after
+          description: The room sensor counts as lost after being unavailable/unknown this long.
+          default: 15
+          selector:
+            number: {min: 1, max: 120, step: 1, unit_of_measurement: min, mode: slider}
+        sensor_lost_action:
+          name: When the sensor is lost
+          description: What to do with the unit once the room sensor is lost.
+          default: turn_off
+          selector:
+            select:
+              options:
+                - label: Turn the unit off
+                  value: turn_off
+                - label: Leave it as it is
+                  value: leave
+        tank_full_sensor:
+          name: Tank-full sensor
+          description: >-
+            Binary sensor that is 'on' when the tank is full. Stops the unit.
+            Not for the drain-pump level sensor. Empty = disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+        persistent_notify:
+          name: Persistent notification
+          description: Create a notification in HA on tank-full, sensor-lost, ineffective-run or pump-problem events.
+          default: true
+          selector:
+            boolean: {}
+        notify_actions:
+          name: Extra notification actions
+          description: >-
+            Optional actions run on tank-full / sensor-lost / ineffective-run /
+            pump-problem events,
+            e.g. a notify.mobile_app_… call. Variables notify_title and
+            notify_message are available in your templates.
+          default: []
+          selector:
+            action: {}
+
+    drain_pump:
+      name: Drain pump
+      icon: mdi:pump
+      collapsed: true
+      input:
+        pump_switch:
+          name: Drain pump switch
+          description: Switch that powers the pump in the tank. Empty = pump control disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: switch
+        pump_level_sensor:
+          name: Tank level sensor
+          description: >-
+            Water/leak sensor mounted in the tank below the unit's own full cut-off
+            ('on' = water reached it). It only starts the pump and never stops the
+            dehumidifier. Use "Tank-full sensor" for a signal that should stop the unit.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: binary_sensor
+                  device_class: moisture
+        pump_level_delay_seconds:
+          name: Level confirmation delay
+          description: Water must be detected this long before pumping (ignores splashes).
+          default: 30
+          selector:
+            number: {min: 0, max: 300, step: 5, unit_of_measurement: s, mode: slider}
+        pump_run_minutes:
+          name: Pump run time
+          description: Length of each pump run.
+          default: 5
+          selector:
+            number: {min: 1, max: 30, step: 1, unit_of_measurement: min, mode: slider}
+        pump_cooldown_minutes:
+          name: Pump cooldown
+          description: >-
+            Minimum pause between pump runs. If the sensor is still wet after a run,
+            the pump retries after this pause and you are notified each time.
+          default: 30
+          selector:
+            number: {min: 5, max: 240, step: 5, unit_of_measurement: min, mode: slider}
+
+# queued: three places intentionally wait (spike check, forced rest, pause after an
+# ineffective run). All happen only while the unit is OFF and the drain pump is idle,
+# so deferring other runs delays nothing urgent. Every run re-reads the current state, so stale queued runs are
+# harmless and overflow is silent.
+mode: queued
+max: 10
+max_exceeded: silent
+
+trigger_variables:
+  tv_sensor: !input humidity_sensor
+  tv_target: !input target_humidity
+  tv_band: !input hysteresis_band
+  tv_presence: !input presence_entities
+  tv_away: !input away_offset
+  tv_windows: !input window_sensors
+  tv_tank: !input tank_full_sensor
+  tv_pump: !input pump_switch
+  tv_level: !input pump_level_sensor
+
+triggers:
+  # Humidity has stayed above the ON threshold for the smoothing time (spike filter)
+  - trigger: template
+    id: humid_high
+    value_template: >-
+      {%- set away = tv_presence | count > 0 and
+          tv_presence | select('is_state', ['home', 'on']) | list | count == 0 -%}
+      {%- set h = states(tv_sensor) -%}
+      {{ h | is_number and h | float > tv_target + (tv_away if away else 0) + tv_band }}
+    for:
+      minutes: !input smoothing_minutes
+  # Humidity fell below the OFF threshold
+  - trigger: template
+    id: dry
+    value_template: >-
+      {%- set away = tv_presence | count > 0 and
+          tv_presence | select('is_state', ['home', 'on']) | list | count == 0 -%}
+      {%- set h = states(tv_sensor) -%}
+      {{ h | is_number and h | float < tv_target + (tv_away if away else 0) - tv_band }}
+  # Room sensor has been unavailable/unknown for N minutes
+  - trigger: state
+    id: sensor_invalid
+    entity_id: !input humidity_sensor
+    to: [unavailable, unknown]
+    for:
+      minutes: !input sensor_unavailable_minutes
+  # Tank became full (template so an empty input never errors)
+  - trigger: template
+    id: tank_full
+    value_template: "{{ tv_tank not in ['', none] and is_state(tv_tank, 'on') }}"
+  # A window/door has been open N minutes / all openings closed again
+  - trigger: template
+    id: window_open
+    value_template: "{{ tv_windows | select('is_state', 'on') | list | count > 0 }}"
+    for:
+      minutes: !input window_open_minutes
+  - trigger: template
+    id: window_closed
+    value_template: >-
+      {{ tv_windows | count > 0 and tv_windows | select('is_state', 'on') | list | count == 0 }}
+  # Compressor timers expired: re-evaluate now instead of waiting for the tick
+  - trigger: state
+    id: min_on_elapsed
+    entity_id: !input dehumidifier
+    to: "on"
+    for:
+      minutes: !input min_on_minutes
+  - trigger: state
+    id: min_off_elapsed
+    entity_id: !input dehumidifier
+    to: "off"
+    for:
+      minutes: !input min_off_minutes
+  - trigger: state
+    id: max_runtime_elapsed
+    entity_id: !input dehumidifier
+    to: "on"
+    for:
+      minutes: !input max_runtime_minutes
+  # Schedule edges
+  - trigger: time
+    id: schedule_edge
+    at: !input time_window_start
+  - trigger: time
+    id: schedule_edge
+    at: !input time_window_end
+  # Recovery after restarts and missed triggers
+  - trigger: homeassistant
+    id: ha_start
+    event: start
+  - trigger: time_pattern
+    id: tick
+    minutes: "/5"
+  # Spike check passed (fired by this automation itself, see branch 5b)
+  - trigger: event
+    id: confirmed
+    event_type: smart_dehumidifier_confirmed
+  # Drain pump: water at the sensor long enough / run time over / 2 min after a run
+  - trigger: template
+    id: pump_level
+    value_template: >-
+      {{ tv_pump not in ['', none] and tv_level not in ['', none]
+         and is_state(tv_level, 'on') }}
+    for:
+      seconds: !input pump_level_delay_seconds
+  - trigger: template
+    id: pump_done
+    value_template: "{{ tv_pump not in ['', none] and is_state(tv_pump, 'on') }}"
+    for:
+      minutes: !input pump_run_minutes
+  - trigger: template
+    id: pump_settled
+    value_template: "{{ tv_pump not in ['', none] and is_state(tv_pump, 'off') }}"
+    for:
+      minutes: 2
+
+conditions:
+  # Ignore "confirmed" events fired by another copy of this blueprint
+  - condition: template
+    value_template: >-
+      {{ trigger.id != 'confirmed' or trigger.event.data.automation == this.entity_id }}
+
+variables:
+  # ───────── inputs ─────────
+  dehumidifier: !input dehumidifier
+  humidity_sensor: !input humidity_sensor
+  control_mode: !input control_mode
+  base_target: !input target_humidity
+  band: !input hysteresis_band
+  smoothing_minutes: !input smoothing_minutes
+  offset_source: !input offset_source
+  manual_offset: !input manual_offset
+  max_offset: !input max_offset
+  setpoint_step: !input setpoint_step
+  setpoint_deadband: !input setpoint_deadband
+  min_on_minutes: !input min_on_minutes
+  min_off_minutes: !input min_off_minutes
+  max_runtime_enabled: !input max_runtime_enabled
+  max_runtime_minutes: !input max_runtime_minutes
+  time_window_mode: !input time_window_mode
+  time_window_start: !input time_window_start
+  time_window_end: !input time_window_end
+  window_sensors: !input window_sensors
+  window_pause_enabled: !input window_pause_enabled
+  window_open_minutes: !input window_open_minutes
+  outdoor_humidity_sensor: !input outdoor_humidity_sensor
+  outdoor_temperature_sensor: !input outdoor_temperature_sensor
+  indoor_temperature_sensor: !input indoor_temperature_sensor
+  drying_margin: !input drying_margin
+  presence_entities: !input presence_entities
+  away_offset: !input away_offset
+  price_sensor: !input price_sensor
+  price_max: !input price_max
+  surplus_sensor: !input surplus_sensor
+  surplus_min: !input surplus_min
+  surplus_invert: !input surplus_invert
+  power_override_humidity: !input power_override_humidity
+  sensor_unavailable_minutes: !input sensor_unavailable_minutes
+  sensor_lost_action: !input sensor_lost_action
+  tank_full_sensor: !input tank_full_sensor
+  persistent_notify: !input persistent_notify
+
+  # ───────── unit state ─────────
+  dehum_domain: "{{ dehumidifier.split('.')[0] }}"
+  turn_on_action: "{{ dehum_domain ~ '.turn_on' }}"
+  turn_off_action: "{{ dehum_domain ~ '.turn_off' }}"
+  precise: "{{ control_mode == 'precise' and dehum_domain == 'humidifier' }}"
+  dehum_state: "{{ states(dehumidifier) }}"
+  is_on: "{{ dehum_state == 'on' }}"
+  # Seconds since the unit last switched on/off (resets on HA restart, which errs long)
+  state_age_s: >-
+    {%- set s = states[dehumidifier] -%}
+    {{ ((as_timestamp(now()) - as_timestamp(s.last_changed)) | round(0)) if s is not none else 0 }}
+  min_on_ok: "{{ state_age_s >= min_on_minutes * 60 - 5 }}"
+  min_off_ok: "{{ state_age_s >= min_off_minutes * 60 - 5 }}"
+  max_runtime_hit: >-
+    {{ max_runtime_enabled and is_on and state_age_s >= max_runtime_minutes * 60 - 5 }}
+  tank_full: "{{ tank_full_sensor not in ['', none] and is_state(tank_full_sensor, 'on') }}"
+
+  # ───────── room humidity ─────────
+  room_valid: "{{ states(humidity_sensor) | is_number }}"
+  room_h: "{{ states(humidity_sensor) | float(0) }}"
+  sensor_lost: >-
+    {%- set s = states[humidity_sensor] -%}
+    {{ (not room_valid) and (s is none or
+       (as_timestamp(now()) - as_timestamp(s.last_changed)) >= sensor_unavailable_minutes * 60 - 5) }}
+  anyone_home: >-
+    {{ presence_entities | count == 0 or
+       presence_entities | select('is_state', ['home', 'on']) | list | count > 0 }}
+  eff_target: "{{ base_target + (0 if anyone_home else away_offset) }}"
+  on_threshold: "{{ eff_target + band }}"
+  off_threshold: "{{ eff_target - band }}"
+  humid: "{{ room_valid and room_h > on_threshold }}"
+  dry: "{{ room_valid and room_h < off_threshold }}"
+  humidity_confirmed: "{{ trigger.id in ['humid_high', 'confirmed'] or smoothing_minutes == 0 }}"
+
+  # ───────── blockers ─────────
+  any_window_open: "{{ window_sensors | select('is_state', 'on') | list | count > 0 }}"
+  window_pause: >-
+    {%- set ns = namespace(hit=false) -%}
+    {%- for s in expand(window_sensors) if s.state == 'on' -%}
+      {%- if as_timestamp(now()) - as_timestamp(s.last_changed) >= window_open_minutes * 60 - 5 -%}
+        {%- set ns.hit = true -%}
+      {%- endif -%}
+    {%- endfor -%}
+    {{ window_pause_enabled and ns.hit }}
+  natural_drying: >-
+    {%- macro abs_h(t, rh, unit) -%}
+      {%- set c = (t - 32) * 5 / 9 if unit == '°F' else t -%}
+      {{- 6.112 * e ** (17.67 * c / (c + 243.5)) * rh * 2.1674 / (273.15 + c) -}}
+    {%- endmacro -%}
+    {%- set oh = states(outdoor_humidity_sensor)
+        if outdoor_humidity_sensor not in ['', none] else 'n/a' -%}
+    {%- if not (any_window_open and room_valid and oh | is_number) -%}
+      {{ false }}
+    {%- else -%}
+      {%- set ti = states(indoor_temperature_sensor)
+          if indoor_temperature_sensor not in ['', none] else 'n/a' -%}
+      {%- set tout = states(outdoor_temperature_sensor)
+          if outdoor_temperature_sensor not in ['', none] else 'n/a' -%}
+      {%- if ti | is_number and tout | is_number -%}
+        {%- set inside = abs_h(ti | float, room_h,
+            state_attr(indoor_temperature_sensor, 'unit_of_measurement')) | float -%}
+        {%- set outside = abs_h(tout | float, oh | float,
+            state_attr(outdoor_temperature_sensor, 'unit_of_measurement')) | float -%}
+      {%- else -%}
+        {%- set inside = room_h -%}
+        {%- set outside = oh | float -%}
+      {%- endif -%}
+      {{ outside < inside * (1 - drying_margin / 100) }}
+    {%- endif -%}
+  in_time_window: >-
+    {%- set t_start = today_at(time_window_start) -%}
+    {%- set t_end = today_at(time_window_end) -%}
+    {%- set n = now() -%}
+    {%- if t_start < t_end -%}
+      {{ t_start <= n and n < t_end }}
+    {%- else -%}
+      {{ n >= t_start or n < t_end }}
+    {%- endif -%}
+  time_ok: >-
+    {{ time_window_mode == 'disabled'
+       or (time_window_mode == 'allow' and in_time_window)
+       or (time_window_mode == 'block' and not in_time_window) }}
+  power_ok: >-
+    {%- set ns = namespace(configured=0, valid=0, cheap=false) -%}
+    {%- if price_sensor not in ['', none] -%}
+      {%- set ns.configured = ns.configured + 1 -%}
+      {%- set p = states(price_sensor) -%}
+      {%- if p | is_number -%}
+        {%- set ns.valid = ns.valid + 1 -%}
+        {%- if p | float <= price_max -%}{%- set ns.cheap = true -%}{%- endif -%}
+      {%- endif -%}
+    {%- endif -%}
+    {%- if surplus_sensor not in ['', none] -%}
+      {%- set ns.configured = ns.configured + 1 -%}
+      {%- set w = states(surplus_sensor) -%}
+      {%- if w | is_number -%}
+        {%- set ns.valid = ns.valid + 1 -%}
+        {%- if w | float * (-1 if surplus_invert else 1) >= surplus_min -%}{%- set ns.cheap = true -%}{%- endif -%}
+      {%- endif -%}
+    {%- endif -%}
+    {{ ns.configured == 0 or ns.valid == 0 or ns.cheap
+       or (room_valid and room_h >= power_override_humidity) }}
+  blocked: "{{ not time_ok or window_pause or natural_drying or not power_ok }}"
+  # For traces only
+  block_reason: >-
+    {{ 'schedule' if not time_ok else 'window open' if window_pause
+       else 'natural drying' if natural_drying else 'expensive power' if not power_ok
+       else 'none' }}
+
+  # ───────── effectiveness guard ─────────
+  humidity_trend_sensor: !input humidity_trend_sensor
+  effect_grace_minutes: !input effect_grace_minutes
+  effect_min_drop_rate: !input effect_min_drop_rate
+  effect_lockout_minutes: !input effect_lockout_minutes
+  # Room humidity trend in %/h (negative = falling); none if disabled/unavailable
+  trend_per_h: >-
+    {%- set r = states(humidity_trend_sensor)
+        if humidity_trend_sensor not in ['', none] else 'n/a' -%}
+    {%- if r | is_number -%}
+      {%- set u = state_attr(humidity_trend_sensor, 'unit_of_measurement') | string -%}
+      {%- set k = 60 if u.endswith('/min') else 3600 if u.endswith('/s')
+          else 1 / 24 if u.endswith('/d') else 1 -%}
+      {{ (r | float * k) | round(2) }}
+    {%- else -%}
+      {{ none }}
+    {%- endif -%}
+  ineffective: >-
+    {{ trend_per_h is not none and is_on and room_valid
+       and state_age_s >= effect_grace_minutes * 60 - 5
+       and room_h > on_threshold
+       and trend_per_h > 0 - effect_min_drop_rate }}
+
+  # ───────── precise mode ─────────
+  offset: >-
+    {%- set c = state_attr(dehumidifier, 'current_humidity') -%}
+    {%- if offset_source == 'auto' and c is not none and c | is_number and room_valid -%}
+      {{ ([[c | float - room_h, max_offset] | min, 0 - max_offset] | max) | round(1) }}
+    {%- else -%}
+      {{ manual_offset }}
+    {%- endif -%}
+  device_setpoint: >-
+    {%- set lo = state_attr(dehumidifier, 'min_humidity') | float(30) -%}
+    {%- set hi = state_attr(dehumidifier, 'max_humidity') | float(80) -%}
+    {%- set stepped = ((eff_target + offset) / setpoint_step) | round(0) * setpoint_step -%}
+    {{ ([[stepped, hi] | min, lo] | max) | int }}
+  setpoint_update_needed: >-
+    {%- set cur = state_attr(dehumidifier, 'humidity') -%}
+    {{ precise and (cur is none or (cur | float(0) - device_setpoint) | abs >= setpoint_deadband) }}
+
+  # ───────── drain pump ─────────
+  pump_switch: !input pump_switch
+  pump_level_sensor: !input pump_level_sensor
+  pump_level_delay_seconds: !input pump_level_delay_seconds
+  pump_run_minutes: !input pump_run_minutes
+  pump_cooldown_minutes: !input pump_cooldown_minutes
+  pump_enabled: "{{ pump_switch not in ['', none] and pump_level_sensor not in ['', none] }}"
+  pump_on: "{{ pump_enabled and is_state(pump_switch, 'on') }}"
+  # Seconds since the pump last switched (resets on HA restart)
+  pump_age_s: >-
+    {%- set s = states[pump_switch] if pump_enabled else none -%}
+    {{ ((as_timestamp(now()) - as_timestamp(s.last_changed)) | round(0)) if s is not none else 0 }}
+  # Seconds the level sensor has been wet (-1 = dry or disabled)
+  level_wet_s: >-
+    {%- set s = states[pump_level_sensor] if pump_enabled else none -%}
+    {{ ((as_timestamp(now()) - as_timestamp(s.last_changed)) | round(0))
+       if s is not none and s.state == 'on' else -1 }}
+  pump_stop_needed: "{{ pump_on and pump_age_s >= pump_run_minutes * 60 - 5 }}"
+  pump_start_needed: >-
+    {{ pump_enabled and is_state(pump_switch, 'off')
+       and level_wet_s >= [pump_level_delay_seconds - 2, 0] | max
+       and pump_age_s >= pump_cooldown_minutes * 60 - 5 }}
+  # Waits in branches 3 and 5b hold the queue, so they are skipped while the pump
+  # is running or about to start; otherwise its shut-off could be delayed.
+  pump_busy: "{{ pump_on or pump_start_needed }}"
+
+actions:
+  # ── DRAIN PUMP: independent of the dehumidifier decision; never waits ─────────
+  - choose:
+      # P1. Run time over → stop (also stops a pump left running by a restart)
+      - conditions: "{{ pump_stop_needed }}"
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: "{{ pump_switch }}"
+      # P2. Water at the level sensor long enough and cooldown over → pump
+      - conditions: "{{ pump_start_needed }}"
+        sequence:
+          - action: switch.turn_on
+            target:
+              entity_id: "{{ pump_switch }}"
+      # P3. Still wet two minutes after a run → pump or hose problem, warn
+      - conditions: >-
+          {{ trigger.id == 'pump_settled' and pump_enabled
+             and is_state(pump_level_sensor, 'on') }}
+        sequence:
+          - variables:
+              notify_title: Dehumidifier drain pump problem
+              notify_message: >-
+                Water is still at the tank sensor 2 minutes after the drain pump ran.
+                Check the pump and its hose. The pump retries in about
+                {{ pump_cooldown_minutes }} min; the dehumidifier's own full cut-off
+                remains the backstop.
+          - if: "{{ persistent_notify }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  title: "{{ notify_title }}"
+                  message: "{{ notify_message }}"
+                  notification_id: "{{ this.entity_id ~ '_pump' }}"
+          - sequence: !input notify_actions
+
+  # ── DEHUMIDIFIER DECISION ─────────────────────────────────────────────────────
+  - choose:
+      # ── 1. SAFETY: tank full ────────────────────────────────────────────────
+      # Stop at once (ignores minimum ON time). Notify on the edge only, not every tick.
+      - conditions: "{{ tank_full }}"
+        sequence:
+          - if: "{{ is_on }}"
+            then:
+              - action: "{{ turn_off_action }}"
+                target:
+                  entity_id: !input dehumidifier
+          - if: "{{ trigger.id == 'tank_full' }}"
+            then:
+              - variables:
+                  notify_title: Dehumidifier tank full
+                  notify_message: >-
+                    {{ state_attr(dehumidifier, 'friendly_name') or dehumidifier }} was
+                    stopped because its tank is full. It resumes automatically once
+                    the tank is emptied.
+              - if: "{{ persistent_notify }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      title: "{{ notify_title }}"
+                      message: "{{ notify_message }}"
+                      notification_id: "{{ this.entity_id ~ '_tank' }}"
+              - sequence: !input notify_actions
+
+      # ── 2. SAFETY: room sensor unavailable / unknown ────────────────────────
+      # Never decide on bad data: hold the current state. Once the sensor has been
+      # invalid for N minutes, turn off (if configured) and notify once.
+      - conditions: "{{ not room_valid }}"
+        sequence:
+          - if: "{{ sensor_lost and sensor_lost_action == 'turn_off' and is_on }}"
+            then:
+              - action: "{{ turn_off_action }}"
+                target:
+                  entity_id: !input dehumidifier
+          - if: "{{ trigger.id == 'sensor_invalid' }}"
+            then:
+              - variables:
+                  notify_title: Dehumidifier – humidity sensor lost
+                  notify_message: >-
+                    {{ state_attr(humidity_sensor, 'friendly_name') or humidity_sensor }}
+                    has been {{ states(humidity_sensor) }} for
+                    {{ sensor_unavailable_minutes }} min.
+                    {{ 'The dehumidifier was turned off.' if sensor_lost_action == 'turn_off'
+                       else 'The dehumidifier was left as it is.' }}
+              - if: "{{ persistent_notify }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      title: "{{ notify_title }}"
+                      message: "{{ notify_message }}"
+                      notification_id: "{{ this.entity_id ~ '_sensor' }}"
+              - sequence: !input notify_actions
+
+      # ── 3. Maximum continuous runtime reached ───────────────────────────────
+      # Turn off, then hold this run for the rest period. Skipped while the pump
+      # is busy so the delay can't hold up the pump's shut-off.
+      - conditions: "{{ max_runtime_hit and not pump_busy }}"
+        sequence:
+          - action: "{{ turn_off_action }}"
+            target:
+              entity_id: !input dehumidifier
+          - delay:
+              minutes: !input rest_minutes
+
+      # ── 3b. Ineffective running ─────────────────────────────────────────────
+      # Past the grace period, still above the ON threshold, and humidity not
+      # falling fast enough → likely an unsensed open door/window or a unit fault.
+      # Known blockers (e.g. a sensed open window) are left to branch 4. Stop,
+      # notify, then pause; skipped while the pump is busy, like branch 3.
+      - conditions: "{{ ineffective and not blocked and not pump_busy }}"
+        sequence:
+          - action: "{{ turn_off_action }}"
+            target:
+              entity_id: !input dehumidifier
+          - variables:
+              notify_title: Dehumidifier not making progress
+              notify_message: >-
+                {{ state_attr(dehumidifier, 'friendly_name') or dehumidifier }} ran
+                {{ (state_age_s / 60) | round(0) | int }} min, but room humidity is
+                still {{ room_h | round(1) }} % and changing {{ trend_per_h }} %/h.
+                A door or window may be open. Paused for {{ effect_lockout_minutes }} min.
+          - if: "{{ persistent_notify }}"
+            then:
+              - action: persistent_notification.create
+                data:
+                  title: "{{ notify_title }}"
+                  message: "{{ notify_message }}"
+                  notification_id: "{{ this.entity_id ~ '_ineffective' }}"
+          - sequence: !input notify_actions
+          - delay:
+              minutes: !input effect_lockout_minutes
+
+      # ── 4. STOP: running, and the room is dry or running isn't allowed ──────
+      # Respects minimum ON time. Blockers: schedule, window open > N min,
+      # natural drying, expensive power (see block_reason in the trace).
+      - conditions: "{{ is_on and (dry or blocked) and min_on_ok }}"
+        sequence:
+          - action: "{{ turn_off_action }}"
+            target:
+              entity_id: !input dehumidifier
+
+      # ── 5. START: off, humid, nothing blocking, minimum OFF time done ───────
+      - conditions: "{{ dehum_state == 'off' and humid and not blocked and min_off_ok }}"
+        sequence:
+          - if: "{{ humidity_confirmed }}"
+            then:
+              # 5a. Already spike-filtered (humid_high trigger or a passed spike check)
+              - action: "{{ turn_on_action }}"
+                target:
+                  entity_id: !input dehumidifier
+              - if: "{{ setpoint_update_needed }}"
+                then:
+                  - action: humidifier.set_humidity
+                    target:
+                      entity_id: !input dehumidifier
+                    data:
+                      humidity: "{{ device_setpoint }}"
+            else:
+              # 5b. Spike check. Skipped while the pump is busy so this wait can't
+              #     delay the pump's shut-off; a later run repeats the check.
+              - if: "{{ not pump_busy }}"
+                then:
+                  - wait_template: >-
+                      {{ not (states(humidity_sensor) | is_number and
+                              states(humidity_sensor) | float(0) > on_threshold) }}
+                    timeout:
+                      minutes: !input smoothing_minutes
+                    continue_on_timeout: true
+                  - if: "{{ not wait.completed }}"
+                    then:
+                      - event: smart_dehumidifier_confirmed
+                        event_data:
+                          automation: "{{ this.entity_id }}"
+
+      # ── 6. PRECISE: keep the unit's setpoint aligned while running ──────────
+      # Follows offset drift and away setback; the deadband avoids cloud spam.
+      - conditions: "{{ is_on and setpoint_update_needed }}"
+        sequence:
+          - action: humidifier.set_humidity
+            target:
+              entity_id: !input dehumidifier
+            data:
+              humidity: "{{ device_setpoint }}"
+    # No default branch: in every other case the unit is already where it should be,
+    # so no command is sent.
