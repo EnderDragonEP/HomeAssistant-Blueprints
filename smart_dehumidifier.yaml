@@ -3,13 +3,41 @@
 
 blueprint:
   name: Smart dehumidifier (energy saving)
-  description: >-
-    Runs a Wi-Fi dehumidifier from an external humidity sensor and keeps the room
-    inside a band around your target with as little runtime as possible. Works with
-    a humidifier entity (device_class dehumidifier) or a plain switch / smart plug.
-    Every power-saving and safety feature is optional, including drain-pump control
-    from a tank level sensor. Only the optional effectiveness guard needs a helper
-    (a Derivative sensor of the room humidity); setup steps are in that section.
+  description: |-
+    Controls a Wi-Fi dehumidifier from an **external room humidity sensor**, keeping
+    humidity inside a band around your target while using as little power as possible.
+
+    **Works with** a humidifier entity (`device_class: dehumidifier`) or a plain
+    switch / smart plug that powers the unit.
+
+    **Control modes**
+    - **Coarse:** switches the unit on and off around the band. Works with any entity.
+    - **Precise:** also sets the unit's own target, corrected for the difference
+      between its built-in sensor and your room sensor. Humidifier entities only.
+
+    **Power saving** (each feature is optional)
+    - Hysteresis band and spike smoothing, so showers or cooking don't start the unit
+    - Minimum ON/OFF time and a maximum runtime with forced rest, to protect the compressor
+    - Run only off-peak, or never during quiet hours
+    - Pause while a window or door is open, and skip running when outdoor air is drier
+    - Relaxed target while nobody is home
+    - Run only on cheap power or solar surplus, with a high-humidity override
+    - Effectiveness guard: stops the unit and notifies you if humidity isn't falling
+      while it runs, for example because a door was left open
+
+    **Safety**
+    - Turns the unit off if the humidity sensor goes offline, and stops it when the tank is full
+    - Drain-pump control from a level sensor in the tank, with a warning if pumping fails
+    - Re-checks on startup and every 5 minutes, and never resends a command the unit
+      is already in
+
+    **Setup:** only the dehumidifier and the room humidity sensor are required. Leave any
+    other field empty to turn that feature off. The effectiveness guard needs one
+    Derivative helper; the steps are at the top of its section. To see why the
+    automation acted, open its traces and check `block_reason`, `humid`, `dry` and
+    `trend_per_h`.
+
+    Requires Home Assistant 2024.10 or newer.
   domain: automation
   homeassistant:
     min_version: "2024.10.0"
@@ -17,6 +45,8 @@ blueprint:
     devices:
       name: Devices and control mode
       icon: mdi:air-humidifier
+      description: >-
+        The two required entities and how the unit is controlled. Everything else in this blueprint is optional.
       input:
         dehumidifier:
           name: Dehumidifier
@@ -57,6 +87,8 @@ blueprint:
     targets:
       name: Target and smoothing
       icon: mdi:water-percent
+      description: >-
+        Where humidity should sit, how wide the on/off band is, and how long a high reading must last before the unit starts.
       input:
         target_humidity:
           name: Target humidity
@@ -84,6 +116,8 @@ blueprint:
     precise_mode:
       name: Precise mode
       icon: mdi:tune-variant
+      description: >-
+        Only used in precise mode. Corrects the unit's own setpoint for the difference between its built-in sensor and your room sensor.
       collapsed: true
       input:
         offset_source:
@@ -130,6 +164,8 @@ blueprint:
     protection:
       name: Compressor protection
       icon: mdi:engine-outline
+      description: >-
+        Limits how often and how long the compressor runs, to reduce wear and wasted energy.
       collapsed: true
       input:
         min_on_minutes:
@@ -166,6 +202,8 @@ blueprint:
     schedule:
       name: Schedule
       icon: mdi:clock-outline
+      description: >-
+        Run only during off-peak hours, or keep the unit off during quiet hours.
       collapsed: true
       input:
         time_window_mode:
@@ -200,6 +238,8 @@ blueprint:
     windows:
       name: Windows and natural drying
       icon: mdi:window-open-variant
+      description: >-
+        Pause while windows or doors are open, and let outdoor air do the drying when it is drier than indoor air.
       collapsed: true
       input:
         window_sensors:
@@ -325,6 +365,8 @@ blueprint:
     presence:
       name: Presence
       icon: mdi:home-account
+      description: >-
+        Relax the target while nobody is home to save energy.
       collapsed: true
       input:
         presence_entities:
@@ -351,6 +393,8 @@ blueprint:
     cheap_power:
       name: Cheap power
       icon: mdi:flash
+      description: >-
+        Run only when electricity is cheap or there is solar surplus. Very high humidity overrides this to prevent mould.
       collapsed: true
       input:
         price_sensor:
@@ -402,6 +446,8 @@ blueprint:
     safety:
       name: Safety and notifications
       icon: mdi:shield-alert
+      description: >-
+        What happens when the room sensor goes offline or the tank is full, and how you are notified.
       collapsed: true
       input:
         sensor_unavailable_minutes:
@@ -451,6 +497,8 @@ blueprint:
     drain_pump:
       name: Drain pump
       icon: mdi:pump
+      description: >-
+        Empties the tank with a pump when water reaches a level sensor, so the unit can keep running without manual emptying.
       collapsed: true
       input:
         pump_switch:
