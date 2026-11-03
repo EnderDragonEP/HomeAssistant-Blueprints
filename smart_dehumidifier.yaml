@@ -27,13 +27,15 @@ blueprint:
 
     **Safety**
     - Turns the unit off if the humidity sensor goes offline, and stops it when the tank is full
-    - Drain-pump control from a level sensor in the tank, with a warning if pumping fails
+    - Drain-pump control from a level sensor in the tank, with dry-run protection and a
+      warning if pumping fails
     - Re-checks on startup and every 5 minutes, and never resends a command the unit
       is already in
 
     **Setup:** only the dehumidifier and the room humidity sensor are required. Leave any
     other field empty to turn that feature off. The effectiveness guard needs one
-    Derivative helper; the steps are at the top of its section. To see why the
+    Derivative helper, and the optional pump lockout needs one Toggle helper; the steps
+    are at the top of their sections. To see why the
     automation acted, open its traces and check `block_reason`, `humid`, `dry` and
     `trend_per_h`.
 
@@ -497,8 +499,21 @@ blueprint:
     drain_pump:
       name: Drain pump
       icon: mdi:pump
-      description: >-
-        Empties the tank with a pump when water reaches a level sensor, so the unit can keep running without manual emptying.
+      description: |-
+        Empties the tank with a pump when water reaches a level sensor, so the unit
+        can keep running without manual emptying.
+
+        **Dry-run protection (optional):** with the pump plug's power sensor and a
+        threshold, the pump is stopped as soon as it draws too little power, which
+        means it is pumping air. To also stop retries until the level sensor reads
+        dry, create a lockout helper once:
+
+        1. Go to **Settings → Devices & services → Helpers → Create helper → Toggle**.
+        2. **Name:** for example *Dehumidifier pump lockout*.
+        3. Select it below as **Pump lockout helper**.
+
+        To find the threshold, look at the plug's power history while the pump moves
+        water and while it runs dry, and pick a value between the two.
       collapsed: true
       input:
         pump_switch:
@@ -537,10 +552,53 @@ blueprint:
           name: Pump cooldown
           description: >-
             Minimum pause between pump runs. If the sensor is still wet after a run,
-            the pump retries after this pause and you are notified each time.
+            the pump retries after this pause (unless the pump lockout is on) and you
+            are notified each time.
           default: 30
           selector:
             number: {min: 5, max: 240, step: 5, unit_of_measurement: min, mode: slider}
+        pump_power_sensor:
+          name: Pump power sensor
+          description: >-
+            Power reading of the pump's smart plug, used for dry-run protection
+            together with the threshold below. Empty = disabled.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: sensor
+                  device_class: power
+        pump_dry_power_threshold:
+          name: Dry-run power threshold
+          description: >-
+            While the pump runs, a reading below this means it is pumping air, and it
+            is stopped at once. In the power sensor's unit (usually W).
+            0 = check disabled.
+          default: 0
+          selector:
+            number: {min: 0, max: 200, step: 0.5, mode: box}
+        pump_power_check_seconds:
+          name: Dry-run check time
+          description: >-
+            The reading must stay below the threshold this long before the pump is
+            stopped. Make it longer than your plug's power reporting interval, so the
+            stale reading right after start-up doesn't count.
+          default: 30
+          selector:
+            number: {min: 5, max: 120, step: 5, unit_of_measurement: s, mode: slider}
+        pump_lockout_helper:
+          name: Pump lockout helper
+          description: >-
+            Optional Toggle helper (setup steps at the top of this section). Turned on
+            when the pump runs dry while the level sensor still reads wet; while it is
+            on, the pump is not started again. It turns off by itself once the level
+            sensor has read dry for a minute, or turn it off yourself after fixing the
+            cause. Empty = retries continue, but each dry run is still cut short.
+          default: ""
+          selector:
+            entity:
+              filter:
+                - domain: input_boolean
 
 # queued: three places intentionally wait (spike check, forced rest, pause after an
 # ineffective run). All happen only while the unit is OFF and the drain pump is idle,
@@ -560,6 +618,8 @@ trigger_variables:
   tv_tank: !input tank_full_sensor
   tv_pump: !input pump_switch
   tv_level: !input pump_level_sensor
+  tv_pwr: !input pump_power_sensor
+  tv_pwr_thr: !input pump_dry_power_threshold
 
 triggers:
   # Humidity has stayed above the ON threshold for the smoothing time (spike filter)
@@ -656,6 +716,15 @@ triggers:
     value_template: "{{ tv_pump not in ['', none] and is_state(tv_pump, 'off') }}"
     for:
       minutes: 2
+  # Drain pump drawing too little power for the check time (pumping air)
+  - trigger: template
+    id: pump_dry
+    value_template: >-
+      {{ tv_pump not in ['', none] and tv_pwr not in ['', none]
+         and is_state(tv_pump, 'on') and states(tv_pwr) | is_number
+         and states(tv_pwr) | float < tv_pwr_thr }}
+    for:
+      seconds: !input pump_power_check_seconds
 
 conditions:
   # Ignore "confirmed" events fired by another copy of this blueprint
@@ -869,11 +938,33 @@ variables:
     {%- set s = states[pump_level_sensor] if pump_enabled else none -%}
     {{ ((as_timestamp(now()) - as_timestamp(s.last_changed)) | round(0))
        if s is not none and s.state == 'on' else -1 }}
+  pump_power_sensor: !input pump_power_sensor
+  pump_dry_power_threshold: !input pump_dry_power_threshold
+  pump_power_check_seconds: !input pump_power_check_seconds
+  pump_lockout_helper: !input pump_lockout_helper
+  lockout_enabled: "{{ pump_enabled and pump_lockout_helper not in ['', none] }}"
+  pump_locked: "{{ lockout_enabled and is_state(pump_lockout_helper, 'on') }}"
+  level_wet: "{{ pump_enabled and is_state(pump_level_sensor, 'on') }}"
+  # Level sensor has read dry for at least a minute (clears the lockout)
+  level_dry_long: >-
+    {%- set s = states[pump_level_sensor] if pump_enabled else none -%}
+    {{ s is not none and s.state == 'off'
+       and as_timestamp(now()) - as_timestamp(s.last_changed) >= 60 }}
+  # Pump plug power reading; none if not configured or unavailable
+  pump_power: >-
+    {%- set w = states(pump_power_sensor)
+        if pump_power_sensor not in ['', none] else 'n/a' -%}
+    {{ (w | float) if w | is_number else none }}
+  # Running, but drawing too little power for long enough → pumping air
+  pump_dry_run: >-
+    {{ pump_on and pump_power is not none and pump_power < pump_dry_power_threshold
+       and pump_age_s >= pump_power_check_seconds - 2 }}
   pump_stop_needed: "{{ pump_on and pump_age_s >= pump_run_minutes * 60 - 5 }}"
   pump_start_needed: >-
     {{ pump_enabled and is_state(pump_switch, 'off')
        and level_wet_s >= [pump_level_delay_seconds - 2, 0] | max
-       and pump_age_s >= pump_cooldown_minutes * 60 - 5 }}
+       and pump_age_s >= pump_cooldown_minutes * 60 - 5
+       and not pump_locked }}
   # Waits in branches 3 and 5b hold the queue, so they are skipped while the pump
   # is running or about to start; otherwise its shut-off could be delayed.
   pump_busy: "{{ pump_on or pump_start_needed }}"
@@ -881,6 +972,38 @@ variables:
 actions:
   # ── DRAIN PUMP: independent of the dehumidifier decision; never waits ─────────
   - choose:
+      # P0. Drawing too little power → pumping air: stop now. If the level sensor
+      #     still reads wet, its reading is wrong (droplets, placement), so lock the
+      #     pump out until the sensor reads dry.
+      - conditions: "{{ pump_dry_run }}"
+        sequence:
+          - action: switch.turn_off
+            target:
+              entity_id: "{{ pump_switch }}"
+          - if: "{{ level_wet and lockout_enabled and not pump_locked }}"
+            then:
+              - action: input_boolean.turn_on
+                target:
+                  entity_id: "{{ pump_lockout_helper }}"
+              - variables:
+                  notify_title: Dehumidifier drain pump locked
+                  notify_message: >-
+                    {%- set u = state_attr(pump_power_sensor, 'unit_of_measurement') or 'W' -%}
+                    The drain pump drew only {{ pump_power }} {{ u }} (threshold
+                    {{ pump_dry_power_threshold }} {{ u }}), so it was pumping air while
+                    the level sensor still reads wet. The pump stays off until the sensor
+                    has read dry for a minute, or until you turn off
+                    {{ state_attr(pump_lockout_helper, 'friendly_name') or pump_lockout_helper }}.
+                    Check that the sensor isn't below the pump's intake or held wet by
+                    droplets.
+              - if: "{{ persistent_notify }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      title: "{{ notify_title }}"
+                      message: "{{ notify_message }}"
+                      notification_id: "{{ this.entity_id ~ '_pump' }}"
+              - sequence: !input notify_actions
       # P1. Run time over → stop (also stops a pump left running by a restart)
       - conditions: "{{ pump_stop_needed }}"
         sequence:
@@ -896,13 +1019,13 @@ actions:
       # P3. Still wet two minutes after a run → pump or hose problem, warn
       - conditions: >-
           {{ trigger.id == 'pump_settled' and pump_enabled
-             and is_state(pump_level_sensor, 'on') }}
+             and is_state(pump_level_sensor, 'on') and not pump_locked }}
         sequence:
           - variables:
               notify_title: Dehumidifier drain pump problem
               notify_message: >-
                 Water is still at the tank sensor 2 minutes after the drain pump ran.
-                Check the pump and its hose. The pump retries in about
+                Check the pump, its hose and the sensor's position. The pump retries in about
                 {{ pump_cooldown_minutes }} min; the dehumidifier's own full cut-off
                 remains the backstop.
           - if: "{{ persistent_notify }}"
@@ -913,6 +1036,12 @@ actions:
                   message: "{{ notify_message }}"
                   notification_id: "{{ this.entity_id ~ '_pump' }}"
           - sequence: !input notify_actions
+      # P4. Level sensor has read dry for a minute → clear the lockout
+      - conditions: "{{ pump_locked and level_dry_long }}"
+        sequence:
+          - action: input_boolean.turn_off
+            target:
+              entity_id: "{{ pump_lockout_helper }}"
 
   # ── DEHUMIDIFIER DECISION ─────────────────────────────────────────────────────
   - choose:
