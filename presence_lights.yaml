@@ -15,25 +15,20 @@ blueprint:
   input:
     presence_sensors:
       name: Presence sensors
-      description: >-
-        Binary sensors that report someone being there. Any type works:
-        motion, occupancy (Frigate person occupancy), or camera person
-        detection.
+      description: Motion, occupancy and Frigate person sensors. Any one "on" turns the lights on.
       selector:
         entity:
-          domain: binary_sensor
           multiple: true
+          filter:
+            - domain: binary_sensor
     target_lights:
-      name: Lights or switches
-      description: What to turn on and off.
+      name: Lights
+      description: Lights or switches to control.
       selector:
         target:
-          entity:
-            - domain: light
-            - domain: switch
     off_delay:
       name: Off delay
-      description: How long every sensor must be clear before turning off.
+      description: How long every sensor must be clear before the lights turn off.
       default:
         hours: 0
         minutes: 5
@@ -41,26 +36,22 @@ blueprint:
       selector:
         duration:
     only_when_dark:
-      name: Only when the sun is down
-      description: >-
-        On: turn on only when the sun is below the horizon (or the weather is
-        bad, if a weather entity is set). Off: turn on at any time.
+      name: Only when dark or bad weather
+      description: When enabled, lights only turn on after sunset or in bad weather.
       default: true
       selector:
         boolean:
     weather_entity:
-      name: Weather entity (optional)
-      description: >-
-        If set, the lights also turn on during the day when this weather
-        entity reports one of the bad-weather states below. Leave empty to
-        ignore the weather.
+      name: Weather entity
+      description: Optional. Leave empty to ignore the weather.
       default: ""
       selector:
         entity:
-          domain: weather
+          filter:
+            - domain: weather
     bad_weather_states:
-      name: Bad-weather states
-      description: Weather states that count as dark enough to turn the lights on.
+      name: Bad weather states
+      description: Weather states that count as bad weather.
       default:
         - rainy
         - pouring
@@ -71,39 +62,44 @@ blueprint:
       selector:
         select:
           multiple: true
+          custom_value: true
           options:
-            - clear-night
-            - cloudy
-            - exceptional
-            - fog
-            - hail
-            - lightning
-            - lightning-rainy
-            - partlycloudy
-            - pouring
             - rainy
-            - snowy
+            - pouring
+            - lightning-rainy
             - snowy-rainy
-            - sunny
-            - windy
-            - windy-variant
+            - snowy
+            - hail
+            - fog
+            - cloudy
 
 mode: restart
 max_exceeded: silent
 
 variables:
+  presence_sensors: !input presence_sensors
+  off_delay: !input off_delay
   only_when_dark: !input only_when_dark
   weather_entity: !input weather_entity
   bad_weather_states: !input bad_weather_states
+  off_delay_seconds: >-
+    {{ (off_delay.hours | default(0) | int) * 3600
+       + (off_delay.minutes | default(0) | int) * 60
+       + (off_delay.seconds | default(0) | int) }}
 
 triggers:
   - trigger: state
     entity_id: !input presence_sensors
     to: "on"
     id: presence
+  # Also fires when a sensor drops to unavailable/unknown, so an offline
+  # camera can't leave the light stuck on.
   - trigger: state
     entity_id: !input presence_sensors
-    to: "off"
+    to:
+      - "off"
+      - unavailable
+      - unknown
     for: !input off_delay
     id: clear
 
@@ -126,10 +122,13 @@ actions:
       - conditions:
           - condition: trigger
             id: clear
-          - condition: state
-            entity_id: !input presence_sensors
-            state: "off"
-            for: !input off_delay
+          - alias: No sensor is on, and none changed state within the off delay
+            condition: template
+            value_template: >-
+              {% set sensors = expand(presence_sensors) %}
+              {% set cutoff = now() - timedelta(seconds=(off_delay_seconds | int) - 2) %}
+              {{ sensors | selectattr('state', 'eq', 'on') | list | count == 0
+                 and sensors | selectattr('last_changed', 'gt', cutoff) | list | count == 0 }}
         sequence:
           - action: homeassistant.turn_off
             target: !input target_lights
