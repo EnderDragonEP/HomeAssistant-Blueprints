@@ -1,0 +1,135 @@
+blueprint:
+  name: Presence lights (motion + Frigate, after dark or bad weather)
+  description: |-
+    Turn lights on when someone is there and off again once everyone has left. Combine as many presence sensors as you like: motion sensors, camera person detection or Frigate person occupancy.
+
+    **How it works:**
+    - **On:** as soon as *any* sensor detects someone, but only after sunset, or during the day when the weather is bad (optional). You can also let it turn on at any time of day
+    - **Off:** once *every* sensor has been clear for the off delay (5 minutes by default)
+    - **Never stuck on:** turning off doesn't depend on the time or the weather, so lights that came on at night or in the rain still turn off after sunrise or when the rain stops
+
+    **Bad weather (optional):** pick a weather entity and choose which conditions count as dark enough, such as rain, snow or hail. The weather is only checked when someone arrives.
+
+    Works with lights and switches. Requires Home Assistant 2024.10 or newer.
+  domain: automation
+  input:
+    presence_sensors:
+      name: Presence sensors
+      description: >-
+        Binary sensors that report someone being there. Any type works:
+        motion, occupancy (Frigate person occupancy), or camera person
+        detection.
+      selector:
+        entity:
+          domain: binary_sensor
+          multiple: true
+    target_lights:
+      name: Lights or switches
+      description: What to turn on and off.
+      selector:
+        target:
+          entity:
+            - domain: light
+            - domain: switch
+    off_delay:
+      name: Off delay
+      description: How long every sensor must be clear before turning off.
+      default:
+        hours: 0
+        minutes: 5
+        seconds: 0
+      selector:
+        duration:
+    only_when_dark:
+      name: Only when the sun is down
+      description: >-
+        On: turn on only when the sun is below the horizon (or the weather is
+        bad, if a weather entity is set). Off: turn on at any time.
+      default: true
+      selector:
+        boolean:
+    weather_entity:
+      name: Weather entity (optional)
+      description: >-
+        If set, the lights also turn on during the day when this weather
+        entity reports one of the bad-weather states below. Leave empty to
+        ignore the weather.
+      default: ""
+      selector:
+        entity:
+          domain: weather
+    bad_weather_states:
+      name: Bad-weather states
+      description: Weather states that count as dark enough to turn the lights on.
+      default:
+        - rainy
+        - pouring
+        - lightning-rainy
+        - snowy-rainy
+        - snowy
+        - hail
+      selector:
+        select:
+          multiple: true
+          options:
+            - clear-night
+            - cloudy
+            - exceptional
+            - fog
+            - hail
+            - lightning
+            - lightning-rainy
+            - partlycloudy
+            - pouring
+            - rainy
+            - snowy
+            - snowy-rainy
+            - sunny
+            - windy
+            - windy-variant
+
+mode: restart
+max_exceeded: silent
+
+variables:
+  only_when_dark: !input only_when_dark
+  weather_entity: !input weather_entity
+  bad_weather_states: !input bad_weather_states
+
+triggers:
+  - trigger: state
+    entity_id: !input presence_sensors
+    to: "on"
+    id: presence
+  - trigger: state
+    entity_id: !input presence_sensors
+    to: "off"
+    for: !input off_delay
+    id: clear
+
+conditions: []
+
+actions:
+  - choose:
+      - conditions:
+          - condition: trigger
+            id: presence
+          - condition: template
+            value_template: >-
+              {% set dark = is_state('sun.sun', 'below_horizon') %}
+              {% set bad_weather = weather_entity not in ['', none]
+                 and states(weather_entity) in bad_weather_states %}
+              {{ (not only_when_dark) or dark or bad_weather }}
+        sequence:
+          - action: homeassistant.turn_on
+            target: !input target_lights
+      - conditions:
+          - condition: trigger
+            id: clear
+          - condition: state
+            entity_id: !input presence_sensors
+            state: "off"
+            for: !input off_delay
+        sequence:
+          - action: homeassistant.turn_off
+            target: !input target_lights

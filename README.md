@@ -23,6 +23,15 @@ Forked from [jhol-byte's blueprint](https://community.home-assistant.io/t/ikea-b
 
 [![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FEnderDragonEP%2FHomeAssistant-Blueprints%2Fblob%2Fmain%2FIkea_bilresa_scroll_wheel.yaml)
 
+### Presence lights (motion + Frigate, after dark or bad weather) 💡
+
+Turns lights or switches on when any motion, camera or Frigate person sensor detects
+someone, and off once every sensor has been clear for a set delay. Can be limited to
+after sunset, with an optional exception for rain, snow or other bad weather during
+the day.
+
+[![Open your Home Assistant instance and show the blueprint import dialog with a specific blueprint pre-filled.](https://my.home-assistant.io/badges/blueprint_import.svg)](https://my.home-assistant.io/redirect/blueprint_import/?blueprint_url=https%3A%2F%2Fgithub.com%2FEnderDragonEP%2FHomeAssistant-Blueprints%2Fblob%2Fmain%2Fpresence_lights.yaml)
+
 ### Smart dehumidifier (energy saving) 💧
 
 Keeps a room at your target humidity with as little runtime as possible, using a
